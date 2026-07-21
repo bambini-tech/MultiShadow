@@ -1,0 +1,20 @@
+{
+  "name": "@multishadow/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Serverless proxy for the Houdini Swap API. Injects the API key server-side; the key never reaches the browser.",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@multishadow/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@vercel/node": "^3.2.24",
+    "typescript": "^5.7.2"
+  }
+}

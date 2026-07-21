@@ -1,0 +1,31 @@
+{
+  "name": "multishadow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private multi-wallet SOL distributor — split your own SOL across your own wallets with privacy routing via Houdini Swap.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md}\"",
+    "typecheck": "pnpm -r typecheck",
+    "dev:web": "pnpm --filter @multishadow/web dev",
+    "dev:api": "pnpm --filter @multishadow/api dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^9.15.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.1",
+    "typescript": "^5.7.2"
+  }
+}

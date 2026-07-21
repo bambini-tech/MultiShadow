@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "moduleResolution": "Bundler",
+    "useDefineForClassFields": true,
+    // Relaxed for the UI layer: idiomatic optional-field patterns and some
+    // third-party (Reown) types are incompatible with exactOptionalPropertyTypes.
+    // The core library keeps it enabled.
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src", "vite-env.d.ts"]
+}
