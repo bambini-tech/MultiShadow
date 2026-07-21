@@ -1,0 +1,23 @@
+{
+  "name": "@multishadow/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MultiShadow frontend: Reown wallet connect, distribution UI, live status.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@multishadow/core": "workspace:*",
+    "@reown/appkit": "^1.6.4",
+    "@reown/appkit-adapter-solana": "^1.6.4",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}
