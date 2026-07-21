@@ -6,5 +6,5 @@
     "types": ["node"],
     "moduleResolution": "Bundler"
   },
-  "include": ["api", "lib"]
+  "include": ["api", "lib", "server.ts"]
 }

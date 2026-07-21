@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/build
+**/.turbo
+**/.vite
+.git
+.github
+*.log
+.env
+.env.*
+!.env.example
+coverage
+.vercel
+.netlify

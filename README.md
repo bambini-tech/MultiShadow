@@ -37,7 +37,8 @@ launch-sniping). See [Non-goals](#non-goals).
 
 ```
 apps/web        → Frontend (Vite + TypeScript, Reown AppKit wallet-connect, UI, state)
-apps/api        → Serverless proxy (Houdini client wiring, API key stays server-side)
+apps/api        → Houdini proxy — standalone HTTP server (server.ts, for Railway/
+                  containers) + Vercel/Netlify serverless fns. API key stays server-side.
 packages/core   → Framework-agnostic logic
                   (Houdini client, distribution, concurrency, Solana batching, state machine)
 packages/core/__tests__
@@ -82,8 +83,9 @@ pnpm build          # build all packages
 pnpm test           # run unit tests (core)
 pnpm typecheck      # type-check all packages
 pnpm lint           # lint
-pnpm dev:web        # run the frontend locally
-pnpm dev:api        # run the proxy locally (vercel dev)
+pnpm dev:web        # run the frontend locally (Vite, proxies /api → :3000)
+pnpm dev:api        # run the proxy + static server locally (tsx watch, :3000)
+pnpm start          # build output served by the standalone server (:3000)
 ```
 
 ---
@@ -124,11 +126,57 @@ progress (`pending → order_created → funded → completed | failed`) so a re
 
 ## Deployment
 
-Both `apps/api` (serverless proxy) and `apps/web` (static frontend) deploy to
-Vercel or Netlify. Set the server-side secrets (`HOUDINI_API_KEY`, etc.) as
-environment variables in the platform dashboard — never in the repo. See
-[`apps/api/vercel.json`](apps/api/vercel.json) and
-[`apps/api/netlify.toml`](apps/api/netlify.toml).
+MultiShadow ships **two** deployment shapes from the same code:
+
+### Railway / any container host (recommended — one service, one domain)
+
+A single Node process ([`apps/api/server.ts`](apps/api/server.ts)) serves **both**
+the built frontend and the `/api/*` proxy routes from the same origin (so no CORS
+config is needed). Railway auto-detects the [`Dockerfile`](Dockerfile); build and
+run behaviour is pinned in [`railway.json`](railway.json).
+
+**Set these variables on the Railway service:**
+
+| Variable                | When        | Notes                                              |
+| ----------------------- | ----------- | -------------------------------------------------- |
+| `HOUDINI_API_KEY`       | **runtime** | Server-side only. Never exposed to the browser.    |
+| `HOUDINI_BASE_URL`      | runtime     | Optional; defaults to the partner API base.        |
+| `VITE_REOWN_PROJECT_ID` | **build**   | Baked into the frontend at build time (see below). |
+| `VITE_SOLANA_RPC_URL`   | build       | Optional; defaults to mainnet-beta.                |
+| `PORT`                  | runtime     | Injected by Railway automatically.                 |
+
+> **`VITE_*` are build-time.** Vite inlines them into the bundle when it builds.
+> If `VITE_REOWN_PROJECT_ID` is missing at **build** time, the wallet-connect code
+> is tree-shaken out — the app still loads, but the Connect button reports the
+> wallet as unavailable. On Railway, set it as a service variable **before** the
+> build; the `Dockerfile` forwards it as a build arg. After changing it, trigger a
+> rebuild (not just a restart). Health check: `GET /healthz`.
+
+Run the same container locally:
+
+```bash
+docker build -t multishadow --build-arg VITE_REOWN_PROJECT_ID=your_id .
+docker run -p 3000:3000 -e HOUDINI_API_KEY=your_key multishadow
+# open http://localhost:3000
+```
+
+Or without Docker: `pnpm -r build && pnpm start` (serves on `:3000`).
+
+### Vercel / Netlify (serverless)
+
+The proxy is also provided as serverless functions
+([`apps/api/api/*`](apps/api/api) for Vercel,
+[`apps/api/netlify/functions/*`](apps/api/netlify/functions) for Netlify) with the
+frontend deployed as a separate static site. See
+[`apps/api/vercel.json`](apps/api/vercel.json),
+[`apps/api/netlify.toml`](apps/api/netlify.toml), and
+[`apps/web/vercel.json`](apps/web/vercel.json). Set the server-side secrets in the
+platform dashboard — never in the repo.
+
+> **Note — don't open `apps/web/dist/index.html` directly from disk.** A bundled
+> ES-module app can't run over `file://` (browsers block module scripts from the
+> `null` origin), so you'll get a blank page. Always run it through the server
+> (`pnpm start`, `pnpm dev:web`, Docker, or your deployment) — over `http(s)://`.
 
 ---
 
