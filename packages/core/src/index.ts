@@ -59,6 +59,10 @@ export {
   isValidAddressForChain,
 } from './solana/address.js';
 
+// Chains / networks
+export { classifyNetwork, evmChainId, isSupportedSourceNetwork } from './chains/networks.js';
+export type { NetworkKind } from './chains/networks.js';
+
 // State
 export {
   canTransition,

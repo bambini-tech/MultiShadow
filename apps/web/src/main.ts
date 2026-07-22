@@ -1,10 +1,11 @@
 /** App bootstrap: wire store, wallet, engine, and UI together. */
-import { Store, initialState, type Settings } from './state.js';
+import { Store, initialState, toTokenRef, type Settings } from './state.js';
 import { mountApp, type Actions } from './ui.js';
 import { createWallet } from './appkit.js';
 import { computePreview, runDistribution, loadBatch } from './engine.js';
+import { loadCatalog, findDefaultSource } from './catalog.js';
 import { config } from './config.js';
-import type { SolanaWallet } from './wallet.js';
+import type { Wallet } from './wallet.js';
 
 const root = document.getElementById('app');
 if (!root) throw new Error('#app not found');
@@ -17,7 +18,7 @@ const batchId = getOrCreateBatchId();
 // The wallet is initialised lazily and defensively: Reown/AppKit init must NEVER
 // prevent the UI from rendering (that was a cause of the blank page — offline,
 // or with a missing project id, an init throw blanked the whole app).
-let wallet: SolanaWallet | undefined;
+let wallet: Wallet | undefined;
 
 const actions: Actions = {
   connect: () => {
@@ -57,8 +58,34 @@ mountApp(root, store, actions);
 // 2) Initialise the wallet in a guard so failures degrade gracefully.
 initWallet();
 
-// 3) Recover any interrupted run for this batch id.
+// 3) Load the full token catalog (all chains/tokens) for the pickers.
+initCatalog();
+
+// 4) Recover any interrupted run for this batch id.
 void loadBatch(store, batchId);
+
+function initCatalog(): void {
+  loadCatalog()
+    .then(() => {
+      const def = findDefaultSource();
+      store.set((s) => ({
+        tokensLoaded: true,
+        // Default the source and any unset recipient token to SOL, matching the
+        // previous out-of-the-box behaviour while keeping full choice.
+        settings: {
+          ...s.settings,
+          source: s.settings.source ?? (def ? toTokenRef(def) : undefined),
+        },
+        recipients: s.recipients.map((r) =>
+          r.token ? r : { ...r, ...(def ? { token: toTokenRef(def) } : {}) },
+        ),
+      }));
+    })
+    .catch((e) => {
+      store.set({ tokensError: e instanceof Error ? e.message : String(e) });
+      store.log(`Could not load token list: ${e instanceof Error ? e.message : String(e)}`);
+    });
+}
 
 function initWallet(): void {
   if (!config.reownProjectId) {
@@ -70,11 +97,13 @@ function initWallet(): void {
     store.set({
       connected: wallet.isConnected(),
       ...(wallet.getAddress() ? { address: wallet.getAddress() } : {}),
+      ...(wallet.getKind() ? { walletKind: wallet.getKind() } : {}),
     });
-    wallet.onChange((address) => {
+    wallet.onChange(({ address, kind }) => {
       store.set({
         connected: Boolean(address),
         ...(address ? { address } : { address: undefined }),
+        ...(kind ? { walletKind: kind } : { walletKind: undefined }),
       });
     });
   } catch (e) {

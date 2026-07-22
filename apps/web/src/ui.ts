@@ -4,9 +4,10 @@
  * state without re-rendering their own container so focus is preserved.
  */
 import { isValidAddressForChain } from '@multishadow/core';
-import { SUPPORTED_CHAINS } from './tokens.js';
 import type { AppState, Recipient, Settings, Store, Strategy } from './state.js';
-import { newRecipient } from './state.js';
+import { newRecipient, toTokenRef } from './state.js';
+import { findDefaultSource, isLoaded as catalogLoaded } from './catalog.js';
+import { openTokenPicker, renderTokenButton, tokenButton } from './tokenPicker.js';
 
 export interface Actions {
   connect(): void;
@@ -21,6 +22,27 @@ const PRIVACY_NOTE =
   'partner exchanges that run KYC/AML per swap — this breaks the public on-chain ' +
   'link, it does not make transfers untraceable to a compelled investigation.';
 
+/** The recipient field guide — the info kept from before, now behind one menu. */
+const FIELD_GUIDE: Array<{ label: string; text: string }> = [
+  {
+    label: 'Token',
+    text: 'The token and chain this wallet should receive. Pick any of the tokens Houdini supports — the source is swapped into this automatically.',
+  },
+  {
+    label: 'Address',
+    text: 'The destination wallet’s PUBLIC address on the chosen token’s chain — one of your own wallets. Never a private key. Turns green when it looks valid.',
+  },
+  {
+    label: 'Min',
+    text: 'Optional. Smallest amount (in the source token) this wallet may receive.',
+  },
+  { label: 'Max', text: 'Optional. Largest amount (in the source token) this wallet may receive.' },
+  {
+    label: 'Weight',
+    text: 'Optional. Relative share for the “weighted” strategy — higher = a bigger portion of the total. Defaults to 1 (equal).',
+  },
+];
+
 export function mountApp(root: HTMLElement, store: Store, actions: Actions): void {
   root.innerHTML = `
     <header class="topbar">
@@ -28,7 +50,7 @@ export function mountApp(root: HTMLElement, store: Store, actions: Actions): voi
         <span class="logo">◲</span>
         <div>
           <h1>MultiShadow</h1>
-          <p class="tagline">Private multi-wallet SOL distributor</p>
+          <p class="tagline">Private multi-wallet distributor</p>
         </div>
       </div>
       <div id="connect" class="connect"></div>
@@ -40,8 +62,12 @@ export function mountApp(root: HTMLElement, store: Store, actions: Actions): voi
 
     <main class="grid">
       <section class="card">
-        <h2>1 · Recipients</h2>
+        <div class="card-head">
+          <h2>1 · Recipients</h2>
+          <button class="btn ghost small" id="guideToggle" aria-expanded="false">ⓘ Field guide</button>
+        </div>
         <p class="hint">Your own wallet addresses. Only public addresses — never private keys.</p>
+        <div id="guide" class="legend" hidden></div>
         <div id="recipients"></div>
         <button class="btn ghost" id="addRecipient">+ Add recipient</button>
       </section>
@@ -74,10 +100,27 @@ export function mountApp(root: HTMLElement, store: Store, actions: Actions): voi
   `;
 
   root.querySelector<HTMLButtonElement>('#addRecipient')!.addEventListener('click', () => {
-    store.set((s) => ({ recipients: [...s.recipients, newRecipient()] }));
+    const def = catalogLoaded() ? findDefaultSource() : undefined;
+    const r = newRecipient();
+    if (def) r.token = toTokenRef(def);
+    store.set((s) => ({ recipients: [...s.recipients, r] }));
   });
   root.querySelector<HTMLButtonElement>('#previewBtn')!.addEventListener('click', actions.preview);
   root.querySelector<HTMLButtonElement>('#runBtn')!.addEventListener('click', actions.run);
+
+  // Field guide (the info menu): hidden by default, keeps rows uncluttered.
+  const guide = root.querySelector<HTMLElement>('#guide')!;
+  const guideToggle = root.querySelector<HTMLButtonElement>('#guideToggle')!;
+  guide.innerHTML = FIELD_GUIDE.map(
+    (g) =>
+      `<div class="legend-item"><span class="legend-label">${g.label}</span><span>${g.text}</span></div>`,
+  ).join('');
+  guideToggle.addEventListener('click', () => {
+    const open = guide.hidden;
+    guide.hidden = !open;
+    guideToggle.setAttribute('aria-expanded', String(open));
+    guideToggle.classList.toggle('active', open);
+  });
 
   const regions = {
     connect: root.querySelector<HTMLElement>('#connect')!,
@@ -97,13 +140,19 @@ export function mountApp(root: HTMLElement, store: Store, actions: Actions): voi
   renderLog(regions.log, store.get());
 
   let prevRecipientCount = store.get().recipients.length;
+  let prevTokensLoaded = store.get().tokensLoaded;
   store.subscribe((s) => {
     renderConnect(regions.connect, s, actions);
-    // Only re-render recipient rows when the set changes (add/remove) to keep
-    // focus while typing.
-    if (s.recipients.length !== prevRecipientCount) {
+    // Re-render recipient rows when the set changes (add/remove) OR when the
+    // catalog finishes loading (so default tokens appear) — both are structural,
+    // not per-keystroke, so focus is preserved during typing.
+    if (s.recipients.length !== prevRecipientCount || s.tokensLoaded !== prevTokensLoaded) {
       renderRecipients(regions.recipients, store);
       prevRecipientCount = s.recipients.length;
+    }
+    if (s.tokensLoaded !== prevTokensLoaded) {
+      renderSettings(regions.settings, s, actions);
+      prevTokensLoaded = s.tokensLoaded;
     }
     renderPreview(regions.preview, s);
     renderStatus(regions.status, s);
@@ -122,7 +171,8 @@ function renderRunButton(root: HTMLElement, s: AppState): void {
 
 function renderConnect(el: HTMLElement, s: AppState, actions: Actions): void {
   if (s.connected && s.address) {
-    el.innerHTML = `<span class="addr" title="${s.address}">${short(s.address)}</span>`;
+    const kind = s.walletKind ? ` · ${s.walletKind.toUpperCase()}` : '';
+    el.innerHTML = `<span class="addr" title="${s.address}">${short(s.address)}${kind}</span>`;
     const btn = document.createElement('button');
     btn.className = 'btn ghost';
     btn.textContent = 'Disconnect';
@@ -141,77 +191,32 @@ function renderConnect(el: HTMLElement, s: AppState, actions: Actions): void {
 function renderRecipients(el: HTMLElement, store: Store): void {
   const { recipients } = store.get();
   el.innerHTML = '';
-  // A single labelled header explains every column (including the cryptic
-  // Min/Max/Weight fields) once — the extra recipient rows stay uncluttered.
-  if (recipients.length > 0) el.appendChild(recipientHeader());
   recipients.forEach((r) => el.appendChild(recipientRow(r, store)));
-}
-
-function recipientHeader(): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'recipient rowhead';
-  row.append(
-    headCell(
-      'Address',
-      'The destination wallet’s PUBLIC address on the selected chain — one of ' +
-        'YOUR own wallets. Never a private key. Turns green when it looks valid ' +
-        'for the chosen chain.',
-      'left',
-    ),
-    headCell(
-      'Chain',
-      'Which chain this wallet receives on. Leave as SOL to stay on Solana, or ' +
-        'pick another chain to route cross-chain (the address must match that chain).',
-      'left',
-    ),
-    headCell('Min', 'Optional. Smallest amount (SOL) this wallet may receive.', 'right'),
-    headCell('Max', 'Optional. Largest amount (SOL) this wallet may receive.', 'right'),
-    headCell(
-      'Weight',
-      'Optional. Relative share for the “weighted” strategy — higher = a bigger ' +
-        'portion of the total. Defaults to 1 (equal).',
-      'right',
-    ),
-    document.createElement('span'), // spacer above the remove-row button
-  );
-  return row;
-}
-
-function headCell(
-  label: string,
-  tip: string,
-  align: 'center' | 'left' | 'right' = 'center',
-): HTMLElement {
-  const c = document.createElement('span');
-  c.className = 'headcell';
-  c.textContent = label;
-  c.appendChild(infoIcon(tip, align));
-  return c;
 }
 
 function recipientRow(r: Recipient, store: Store): HTMLElement {
   const row = document.createElement('div');
   row.className = 'recipient';
 
+  // Destination token picker (any chain / any token).
+  const tokenBtn = tokenButton(r.token, 'Token', () => {
+    openTokenPicker({
+      title: 'Receive as…',
+      current: r.token?.id,
+      onSelect: (t) => {
+        const ref = toTokenRef(t);
+        patchRecipient(store, r.id, { token: ref });
+        renderTokenButton(tokenBtn, ref, 'Token');
+        validateAddr(addr, addr.value, ref.network);
+      },
+    });
+  });
+
   const addr = input('text', r.address, 'Destination address');
   addr.classList.add('grow');
   addr.addEventListener('input', () => {
     patchRecipient(store, r.id, { address: addr.value });
-    validateAddr(addr, addr.value, chain.value);
-  });
-
-  const chain = document.createElement('select');
-  chain.className = 'select';
-  for (const c of SUPPORTED_CHAINS) {
-    const opt = document.createElement('option');
-    opt.value = c;
-    opt.textContent = c;
-    if (c === r.chain) opt.selected = true;
-    chain.appendChild(opt);
-  }
-  chain.addEventListener('change', () => {
-    patchRecipient(store, r.id, { chain: chain.value });
-    validateAddr(addr, addr.value, chain.value);
+    validateAddr(addr, addr.value, r.token?.network);
   });
 
   const min = numInput(r.min, 'min');
@@ -235,17 +240,17 @@ function recipientRow(r: Recipient, store: Store): HTMLElement {
     store.set((s) => ({ recipients: s.recipients.filter((x) => x.id !== r.id) })),
   );
 
-  row.append(addr, chain, min, max, weight, del);
-  validateAddr(addr, r.address, r.chain);
+  row.append(tokenBtn, addr, min, max, weight, del);
+  validateAddr(addr, r.address, r.token?.network);
   return row;
 }
 
-function validateAddr(el: HTMLInputElement, value: string, chain: string): void {
-  if (value.trim() === '') {
+function validateAddr(el: HTMLInputElement, value: string, network: string | undefined): void {
+  if (value.trim() === '' || !network) {
     el.classList.remove('invalid', 'valid');
     return;
   }
-  const ok = isValidAddressForChain(value, chain);
+  const ok = isValidAddressForChain(value, network);
   el.classList.toggle('invalid', !ok);
   el.classList.toggle('valid', ok);
 }
@@ -253,16 +258,40 @@ function validateAddr(el: HTMLInputElement, value: string, chain: string): void 
 function renderSettings(el: HTMLElement, s: AppState, actions: Actions): void {
   el.innerHTML = '';
   const st = s.settings;
+  const sym = st.source?.symbol ?? 'source';
 
+  // Source token — the asset every recipient is funded FROM (any chain).
+  const srcBtn = tokenButton(st.source, s.tokensLoaded ? 'Select source' : 'Loading…', () => {
+    openTokenPicker({
+      title: 'Send from…',
+      current: st.source?.id,
+      onSelect: (t) => {
+        const ref = toTokenRef(t);
+        actions.updateSettings({ source: ref });
+        renderTokenButton(srcBtn, ref, 'Select source');
+        // Relabel the total field to the new source symbol.
+        const totalSpan = el.querySelector<HTMLElement>('#totalLabel');
+        if (totalSpan) totalSpan.firstChild!.textContent = `Total to distribute (${ref.symbol}) `;
+      },
+    });
+  });
   el.appendChild(
     field(
-      'Total to distribute (SOL)',
-      bind(numInput(st.total, '1.0'), (v) => actions.updateSettings({ total: Number(v) || 0 })),
-      'The total amount of SOL to split across all recipient wallets below. The ' +
-        'per-wallet amounts always add up to exactly this number. This is the SOL ' +
-        'that leaves your connected (source) wallet.',
+      'Source — you send',
+      srcBtn,
+      'The token every recipient is funded from. It can be on any chain Houdini ' +
+        'supports; connect a matching wallet (Solana or EVM) to sign the funding.',
     ),
   );
+
+  const totalField = field(
+    `Total to distribute (${sym})`,
+    bind(numInput(st.total, '1.0'), (v) => actions.updateSettings({ total: Number(v) || 0 })),
+    'The total amount of the source token to split across all recipient wallets ' +
+      'below. The per-wallet amounts always add up to exactly this number.',
+  );
+  totalField.querySelector('span')!.id = 'totalLabel';
+  el.appendChild(totalField);
 
   const strat = document.createElement('select');
   strat.className = 'select';
@@ -343,16 +372,18 @@ function renderPreview(el: HTMLElement, s: AppState): void {
     el.innerHTML = `<p class="hint">No preview yet — add recipients and recompute.</p>`;
     return;
   }
+  const sym = s.settings.source?.symbol ?? '';
   const total = s.preview.reduce((a, r) => a + r.amount, 0);
   const rows = s.preview
     .map(
-      (r) => `<tr><td class="mono">${short(r.address)}</td><td>${r.chain}</td>
+      (r) => `<tr><td class="mono">${short(r.address)}</td>
+        <td>${r.token ? `${escapeHtml(r.token.symbol)} · ${escapeHtml(r.token.network)}` : '—'}</td>
         <td class="num">${r.amount.toFixed(6)}</td></tr>`,
     )
     .join('');
   el.innerHTML = `
     <table class="tbl">
-      <thead><tr><th>Recipient</th><th>Chain</th><th class="num">Amount (SOL)</th></tr></thead>
+      <thead><tr><th>Recipient</th><th>Receives</th><th class="num">Amount (${escapeHtml(sym)})</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr><td colspan="2">Total</td><td class="num">${total.toFixed(6)}</td></tr></tfoot>
     </table>`;

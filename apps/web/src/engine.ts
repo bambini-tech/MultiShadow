@@ -4,9 +4,15 @@
  * Flow (mirrors the milestones):
  *   1. Compute amounts (distribution engine).                       [preview]
  *   2. Create a Houdini order per recipient → deposit address + amount.
- *   3. Batch `SystemProgram.transfer`s into as few signed txs as possible,
- *      each funding the deposit addresses (one wallet prompt per batch).
+ *   3. Fund every deposit address FROM the selected source token:
+ *        · Solana (native SOL) → batched `SystemProgram.transfer`s (one wallet
+ *          prompt per batch).
+ *        · EVM (native coin or ERC-20) → one transfer per recipient.
  *   4. Poll each order until completed/failed.
+ *
+ * The order-creation and polling phases are network-agnostic (they only use
+ * Houdini token ids + order ids); only the funding phase branches on the source
+ * network.
  *
  * A Kv-backed store keyed by an idempotent key makes the run resumable and
  * prevents double-funding after a reload.
@@ -29,21 +35,33 @@ import {
   HoudiniClient,
   toBaseUnits,
   fromBaseUnits,
+  classifyNetwork,
+  evmChainId,
   type WalletRecord,
   type KeyValueBackend,
   type DepositTransfer,
 } from '@multishadow/core';
+import { Interface } from 'ethers';
 import { config } from './config.js';
-import { proxy } from './proxy.js';
-import { findSolToken, resolveDestinationToken } from './tokens.js';
-import type { Recipient, Settings, PreviewRow, Store } from './state.js';
-import type { SolanaWallet } from './wallet.js';
+import type { Recipient, Settings, PreviewRow, Store, TokenRef } from './state.js';
+import type { Wallet } from './wallet.js';
+
+/** EVM native coins are 18-decimal (wei); Solana native SOL is 9 (lamports). */
+const EVM_NATIVE_DECIMALS = 18;
+const erc20Interface = new Interface(['function transfer(address to, uint256 amount)']);
 
 // ── Preview (pure, no network) ─────────────────────────────────────────────
 
+/** A recipient counts toward the split only once it has an address AND a token. */
+function isReady(r: Recipient): r is Recipient & { token: TokenRef } {
+  return r.address.trim() !== '' && r.token !== undefined;
+}
+
 export function computePreview(recipients: Recipient[], settings: Settings): PreviewRow[] {
-  const valid = recipients.filter((r) => r.address.trim() !== '');
+  const valid = recipients.filter(isReady);
   if (valid.length === 0) return [];
+
+  const decimals = sourceDecimals(settings.source);
 
   let amounts: number[];
   if (settings.strategy === 'equal') {
@@ -52,6 +70,7 @@ export function computePreview(recipients: Recipient[], settings: Settings): Pre
     amounts = weightedAllocation(
       settings.total,
       valid.map((r) => (r.weight && r.weight > 0 ? r.weight : 1)),
+      decimals,
     );
   } else {
     // random-in-range: honor per-recipient bounds if present.
@@ -65,9 +84,18 @@ export function computePreview(recipients: Recipient[], settings: Settings): Pre
   return valid.map((r, i) => ({
     recipientId: r.id,
     address: r.address,
-    chain: r.chain,
+    token: r.token,
     amount: amounts[i] ?? 0,
   }));
+}
+
+/** Source token base-unit precision (defaults to SOL's 9 for the SOL source). */
+function sourceDecimals(source: TokenRef | undefined): number {
+  if (source?.decimals !== undefined) return Math.min(18, Math.max(0, source.decimals));
+  if (source && classifyNetwork(source.network) === 'evm' && !source.contractAddress) {
+    return EVM_NATIVE_DECIMALS;
+  }
+  return 9;
 }
 
 /** Exact weighted split (base units) that sums to `total`. */
@@ -97,7 +125,7 @@ const localStorageBackend: KeyValueBackend = {
 
 export interface RunDeps {
   store: Store;
-  wallet: SolanaWallet;
+  wallet: Wallet;
   /** Deterministic batch id lets a reload resume the same batch. */
   batchId: string;
 }
@@ -109,38 +137,46 @@ export interface RunDeps {
 export async function runDistribution(deps: RunDeps): Promise<void> {
   const { store, wallet, batchId } = deps;
   const { recipients, settings } = store.get();
-  const source = wallet.getAddress();
-  if (!source) throw new Error('Connect a Solana wallet first.');
+  const source = settings.source;
+  if (!source) throw new Error('Pick a source token to send from first.');
 
-  const walletStore = new KvWalletStore(localStorageBackend);
-  const connection = new Connection(config.solanaRpcUrl, 'confirmed');
+  const sourceKind = classifyNetwork(source.network);
+  if (sourceKind === 'other') {
+    throw new Error(
+      `Sending from ${source.symbol} on ${source.network} isn't supported yet — ` +
+        `pick a Solana or EVM-chain source token. (Recipients can still be any chain.)`,
+    );
+  }
+  if (sourceKind === 'solana' && source.contractAddress) {
+    throw new Error(
+      `Sending from the SPL token ${source.symbol} isn't supported yet — use SOL, ` +
+        `or an EVM-chain source token.`,
+    );
+  }
+
   store.set({ running: true });
-
   try {
     const preview = computePreview(recipients, settings);
-    if (preview.length === 0) throw new Error('Add at least one recipient with an address.');
+    if (preview.length === 0) {
+      throw new Error('Add at least one recipient with an address and a destination token.');
+    }
 
-    store.log('Resolving Houdini tokens…');
-    const tokens = await proxy.tokens();
-    const solToken = findSolToken(tokens);
-    if (!solToken) throw new Error('Could not resolve the SOL token id from Houdini.');
-
-    // Build the per-recipient plan with resolved destination token ids.
+    // Build the per-recipient plan. `from`/`to` are Houdini token ids.
     const plan = preview.map((row, index) => {
-      const dest = resolveDestinationToken(tokens, row.chain);
-      if (!dest) throw new Error(`Unsupported destination chain: ${row.chain}`);
+      const dest = row.token!;
       const key = makeWalletKey({
         batchId,
         receiver: row.address,
-        from: solToken.id,
+        from: source.id,
         to: dest.id,
         index,
       });
-      return { row, index, fromId: solToken.id, toId: dest.id, key };
+      return { row, index, fromId: source.id, toId: dest.id, key };
     });
 
     // Phase 1 — create orders (bounded concurrency, settled per item).
     store.log(`Creating ${plan.length} orders…`);
+    const walletStore = new KvWalletStore(localStorageBackend);
     const houdini = new HoudiniClient({ baseUrl: config.apiBaseUrl });
     const created = await runPool(
       plan,
@@ -205,33 +241,11 @@ export async function runDistribution(deps: RunDeps): Promise<void> {
       return;
     }
 
-    // Phase 2 — batch + sign + send.
-    const transfers: DepositTransfer[] = toFund.map((r) => ({
-      depositAddress: r.depositAddress as string,
-      lamports: solToLamports(r.depositAmount as number),
-      ref: r.key,
-    }));
-
-    store.log('Fetching recent blockhash…');
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
-    const batches = buildBatchedTransactions({
-      source: new PublicKey(source),
-      transfers,
-      recentBlockhash: blockhash,
-    });
-    store.log(`Signing ${batches.length} batch transaction(s)…`);
-
-    for (const batch of batches) {
-      const signature = await wallet.signAndSendTransaction(batch.transaction as SolTransaction);
-      store.log(`Batch sent: ${signature.slice(0, 12)}…`);
-      for (const t of batch.transfers) {
-        const rec = await walletStore.get(t.ref as string);
-        if (rec) {
-          const funded = transition(rec, 'funded', { fundingTxSignature: signature });
-          await walletStore.put(funded);
-          publish(store, funded);
-        }
-      }
+    // Phase 2 — fund deposits (branches on the source network).
+    if (sourceKind === 'solana') {
+      await fundSolana(store, wallet, walletStore, toFund);
+    } else {
+      await fundEvm(store, wallet, walletStore, toFund, source);
     }
 
     // Phase 3 — poll each order until settled.
@@ -260,6 +274,92 @@ export async function runDistribution(deps: RunDeps): Promise<void> {
   } finally {
     store.set({ running: false });
   }
+}
+
+// ── Funding: Solana (native SOL, batched) ──────────────────────────────────
+
+async function fundSolana(
+  store: Store,
+  wallet: Wallet,
+  walletStore: KvWalletStore,
+  toFund: WalletRecord[],
+): Promise<void> {
+  const source = wallet.getAddress();
+  if (!source) throw new Error('Connect a Solana wallet to fund the deposits.');
+  const connection = new Connection(config.solanaRpcUrl, 'confirmed');
+
+  const transfers: DepositTransfer[] = toFund.map((r) => ({
+    depositAddress: r.depositAddress as string,
+    lamports: solToLamports(r.depositAmount as number),
+    ref: r.key,
+  }));
+
+  store.log('Fetching recent blockhash…');
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const batches = buildBatchedTransactions({
+    source: new PublicKey(source),
+    transfers,
+    recentBlockhash: blockhash,
+  });
+  store.log(`Signing ${batches.length} batch transaction(s)…`);
+
+  for (const batch of batches) {
+    const signature = await wallet.signAndSendSolana(batch.transaction as SolTransaction);
+    store.log(`Batch sent: ${signature.slice(0, 12)}…`);
+    for (const t of batch.transfers) {
+      const rec = await walletStore.get(t.ref as string);
+      if (rec) {
+        const funded = transition(rec, 'funded', { fundingTxSignature: signature });
+        await walletStore.put(funded);
+        publish(store, funded);
+      }
+    }
+  }
+}
+
+// ── Funding: EVM (native coin or ERC-20, one tx per recipient) ─────────────
+
+async function fundEvm(
+  store: Store,
+  wallet: Wallet,
+  walletStore: KvWalletStore,
+  toFund: WalletRecord[],
+  source: TokenRef,
+): Promise<void> {
+  const chainId = evmChainId(source.network);
+  if (chainId === undefined) {
+    throw new Error(`Unknown EVM chain id for ${source.network}.`);
+  }
+  store.log(`Switching wallet to ${source.network} (chain ${chainId})…`);
+  await wallet.switchEvmChain(chainId);
+
+  const decimals = source.contractAddress
+    ? (source.decimals ?? evmTokenDecimalsFallback(source))
+    : EVM_NATIVE_DECIMALS;
+
+  // EVM can't batch transfers to different addresses in one native tx, so each
+  // deposit is its own transaction (and its own wallet prompt).
+  for (const r of toFund) {
+    const amount = toBaseUnits(r.depositAmount as number, decimals);
+    const to = r.depositAddress as string;
+    let hash: string;
+    if (source.contractAddress) {
+      const data = erc20Interface.encodeFunctionData('transfer', [to, amount]);
+      hash = await wallet.sendEvm({ chainId, to: source.contractAddress, data });
+    } else {
+      hash = await wallet.sendEvm({ chainId, to, valueWei: amount });
+    }
+    store.log(`Sent to ${to.slice(0, 10)}…: ${hash.slice(0, 12)}…`);
+    const funded = transition(r, 'funded', { fundingTxSignature: hash });
+    await walletStore.put(funded);
+    publish(store, funded);
+  }
+}
+
+function evmTokenDecimalsFallback(source: TokenRef): never {
+  throw new Error(
+    `Missing decimals for ERC-20 source token ${source.symbol}; cannot compute the exact amount.`,
+  );
 }
 
 /** Load any persisted records for a batch (recovery of an interrupted run). */
