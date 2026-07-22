@@ -141,7 +141,52 @@ function renderConnect(el: HTMLElement, s: AppState, actions: Actions): void {
 function renderRecipients(el: HTMLElement, store: Store): void {
   const { recipients } = store.get();
   el.innerHTML = '';
+  // A single labelled header explains every column (including the cryptic
+  // Min/Max/Weight fields) once — the extra recipient rows stay uncluttered.
+  if (recipients.length > 0) el.appendChild(recipientHeader());
   recipients.forEach((r) => el.appendChild(recipientRow(r, store)));
+}
+
+function recipientHeader(): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'recipient rowhead';
+  row.append(
+    headCell(
+      'Address',
+      'The destination wallet’s PUBLIC address on the selected chain — one of ' +
+        'YOUR own wallets. Never a private key. Turns green when it looks valid ' +
+        'for the chosen chain.',
+      'left',
+    ),
+    headCell(
+      'Chain',
+      'Which chain this wallet receives on. Leave as SOL to stay on Solana, or ' +
+        'pick another chain to route cross-chain (the address must match that chain).',
+      'left',
+    ),
+    headCell('Min', 'Optional. Smallest amount (SOL) this wallet may receive.', 'right'),
+    headCell('Max', 'Optional. Largest amount (SOL) this wallet may receive.', 'right'),
+    headCell(
+      'Weight',
+      'Optional. Relative share for the “weighted” strategy — higher = a bigger ' +
+        'portion of the total. Defaults to 1 (equal).',
+      'right',
+    ),
+    document.createElement('span'), // spacer above the remove-row button
+  );
+  return row;
+}
+
+function headCell(
+  label: string,
+  tip: string,
+  align: 'center' | 'left' | 'right' = 'center',
+): HTMLElement {
+  const c = document.createElement('span');
+  c.className = 'headcell';
+  c.textContent = label;
+  c.appendChild(infoIcon(tip, align));
+  return c;
 }
 
 function recipientRow(r: Recipient, store: Store): HTMLElement {
@@ -213,6 +258,9 @@ function renderSettings(el: HTMLElement, s: AppState, actions: Actions): void {
     field(
       'Total to distribute (SOL)',
       bind(numInput(st.total, '1.0'), (v) => actions.updateSettings({ total: Number(v) || 0 })),
+      'The total amount of SOL to split across all recipient wallets below. The ' +
+        'per-wallet amounts always add up to exactly this number. This is the SOL ' +
+        'that leaves your connected (source) wallet.',
     ),
   );
 
@@ -228,12 +276,22 @@ function renderSettings(el: HTMLElement, s: AppState, actions: Actions): void {
   strat.addEventListener('change', () =>
     actions.updateSettings({ strategy: strat.value as Strategy }),
   );
-  el.appendChild(field('Amount strategy', strat));
+  el.appendChild(
+    field(
+      'Amount strategy',
+      strat,
+      'How the total is divided. equal = every wallet gets the same amount. ' +
+        'random-in-range = randomized amounts (optionally within each wallet’s ' +
+        'Min/Max). weighted = split by each wallet’s Weight.',
+    ),
+  );
 
   el.appendChild(
     field(
       `Jitter (randomness): ${st.jitter.toFixed(2)}`,
       bind(slider(0, 1, 0.05, st.jitter), (v) => actions.updateSettings({ jitter: Number(v) })),
+      'How uneven the random split is. 0 = as even as possible; 1 = fully random ' +
+        'within the allowed range. Only affects the random and weighted strategies.',
     ),
   );
 
@@ -243,6 +301,8 @@ function renderSettings(el: HTMLElement, s: AppState, actions: Actions): void {
       bind(slider(1, 12, 1, st.concurrency), (v) =>
         actions.updateSettings({ concurrency: Number(v) }),
       ),
+      'How many swaps run at the same time. Higher = faster. Lower = fewer ' +
+        'simultaneous swaps, which makes it less obvious the wallets are related.',
     ),
   );
 
@@ -252,6 +312,8 @@ function renderSettings(el: HTMLElement, s: AppState, actions: Actions): void {
       bind(slider(0, 20000, 500, st.maxJitterMs), (v) =>
         actions.updateSettings({ maxJitterMs: Number(v) }),
       ),
+      'A random delay added before each recipient’s swap. Larger values reduce ' +
+        'timing correlation between recipients (more privacy) but slow the run down.',
     ),
   );
 
@@ -262,6 +324,13 @@ function renderSettings(el: HTMLElement, s: AppState, actions: Actions): void {
   const anonLabel = document.createElement('label');
   anonLabel.className = 'checkbox';
   anonLabel.append(anon, document.createTextNode(' Private (anonymous) routing'));
+  anonLabel.appendChild(
+    infoIcon(
+      'Routes each swap privately through Houdini so the public on-chain link ' +
+        'between your source and destination wallets is broken. Keep this on. ' +
+        'Note: this is privacy from the public — partner exchanges still run KYC/AML.',
+    ),
+  );
   el.appendChild(anonLabel);
 }
 
@@ -353,13 +422,30 @@ function bind(el: HTMLInputElement, cb: (v: string) => void): HTMLInputElement {
   return el;
 }
 
-function field(label: string, control: HTMLElement): HTMLElement {
+function field(label: string, control: HTMLElement, tip?: string): HTMLElement {
   const wrap = document.createElement('label');
   wrap.className = 'field';
   const span = document.createElement('span');
   span.textContent = label;
+  if (tip) span.appendChild(infoIcon(tip));
   wrap.append(span, control);
   return wrap;
+}
+
+/**
+ * A small "i" badge that shows an explanatory tooltip on hover/focus. Keyboard
+ * accessible (tabbable + aria-label). `align` shifts the bubble so it doesn't
+ * run off-screen for right-hand columns.
+ */
+function infoIcon(tip: string, align: 'center' | 'left' | 'right' = 'center'): HTMLSpanElement {
+  const el = document.createElement('span');
+  el.className = align === 'center' ? 'info' : `info info-${align}`;
+  el.textContent = 'i';
+  el.tabIndex = 0;
+  el.setAttribute('role', 'note');
+  el.setAttribute('aria-label', tip);
+  el.dataset.tip = tip;
+  return el;
 }
 
 function patchRecipient(store: Store, id: string, patch: Partial<Recipient>): void {
