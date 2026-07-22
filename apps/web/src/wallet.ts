@@ -2,27 +2,17 @@
  * Wallet abstraction.
  *
  * The rest of the app depends on this narrow interface, NOT on Reown's concrete
- * types, so the wallet layer is swappable and testable. The Reown-backed
- * implementation lives in ./appkit.ts.
+ * types, so the wallet layer is swappable. The Reown-backed implementation lives
+ * in ./appkit.ts.
  *
- * The SOURCE wallet can be Solana OR any EVM chain — whichever ecosystem the
- * selected source token lives on. Recipient private keys are never involved.
+ * The native multi-swap flow needs two signing primitives:
+ *   - Solana: sign + send a batched deposit transaction Houdini pre-built.
+ *   - EVM:    sign an ERC-4337 user-operation hash (submitted back via the proxy).
+ * Only the SOURCE wallet signs; recipient keys are never involved.
  */
-import type { Transaction } from '@solana/web3.js';
+import type { Transaction, VersionedTransaction } from '@solana/web3.js';
 
 export type WalletKind = 'solana' | 'evm';
-
-/** One EVM transaction: a native value transfer, or an ERC-20 `transfer()`. */
-export interface EvmSendRequest {
-  /** Numeric chain id the transaction must be sent on. */
-  chainId: number;
-  /** Recipient (deposit) address. */
-  to: string;
-  /** Native value in wei (native-coin funding). Omit for ERC-20. */
-  valueWei?: bigint;
-  /** Calldata (ERC-20 `transfer(to,amount)`). Omit for native. */
-  data?: string;
-}
 
 export interface WalletState {
   address?: string;
@@ -39,12 +29,13 @@ export interface Wallet {
   disconnect(): Promise<void>;
   onChange(cb: (state: WalletState) => void): () => void;
   /**
-   * Sign and send a fully-built Solana transaction (feePayer + recentBlockhash
-   * set). Returns the signature. One call = one wallet prompt = one batch.
+   * Sign and send a fully-built Solana transaction (legacy or versioned).
+   * Returns the signature. Used for Houdini's batched deposit transactions.
    */
-  signAndSendSolana(tx: Transaction): Promise<string>;
-  /** Ensure the EVM wallet is connected to `chainId` (prompts a switch/add). */
-  switchEvmChain(chainId: number): Promise<void>;
-  /** Send one EVM transaction (native or ERC-20). Returns the tx hash. */
-  sendEvm(req: EvmSendRequest): Promise<string>;
+  signAndSendSolana(tx: Transaction | VersionedTransaction): Promise<string>;
+  /**
+   * Sign a message/hash with the EVM wallet (personal_sign). Used to sign the
+   * ERC-4337 user-operation hash for EVM multi-swaps. Returns the 0x signature.
+   */
+  signEvmMessage(message: string | Uint8Array): Promise<string>;
 }

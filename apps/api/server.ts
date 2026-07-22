@@ -29,6 +29,7 @@ import {
   type HandlerInput,
   type HandlerResult,
 } from './lib/handlers.js';
+import { forwardHoudini } from './lib/forward.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = normalize(join(here, '..', 'web', 'dist'));
@@ -137,6 +138,26 @@ const server = createServer((req, res) => {
       // Health check for the platform (Railway healthcheckPath).
       if (url.pathname === '/healthz') {
         sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      // Generic allowlisted passthrough to Houdini v2 (native multi-swap flow).
+      if (url.pathname === '/api/hd' || url.pathname.startsWith('/api/hd/')) {
+        applyCors(req, res);
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204).end();
+          return;
+        }
+        if (req.method !== 'GET' && req.method !== 'POST') {
+          sendJson(res, 405, { error: 'Method not allowed. Use GET or POST.' });
+          return;
+        }
+        const subpath = url.pathname.slice('/api/hd'.length) || '/';
+        const query: Record<string, string | undefined> = {};
+        for (const [k, v] of url.searchParams) query[k] = v;
+        const body = req.method === 'POST' ? await readJsonBody(req) : undefined;
+        const result = await forwardHoudini(req.method, subpath, query, body);
+        sendJson(res, result.status, result.body);
         return;
       }
 

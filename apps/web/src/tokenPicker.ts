@@ -1,15 +1,14 @@
 /**
  * Searchable token+chain picker — the HoudiniSwap-style selector reused by the
- * source field and every recipient row. Opens a modal over the whole catalog so
- * the user can pick any token on any chain.
+ * source field and every recipient row. Searches the Houdini v2 catalog
+ * server-side as the user types, so any token on any chain is reachable.
  */
-import type { HoudiniToken } from '@multishadow/core';
-import { classifyNetwork } from '@multishadow/core';
+import type { V2Token } from '@multishadow/core';
 import type { TokenRef } from './state.js';
-import { getTokens, isLoaded, searchTokens } from './catalog.js';
+import { searchTokens } from './catalog.js';
 
 export interface PickerOptions {
-  onSelect: (token: HoudiniToken) => void;
+  onSelect: (token: V2Token) => void;
   /** Currently selected token id, highlighted in the list. */
   current?: string;
   title?: string;
@@ -24,7 +23,6 @@ export function tokenAvatar(ref: { symbol: string; logo?: string }): HTMLElement
     img.src = ref.logo;
     img.alt = '';
     img.loading = 'lazy';
-    // If the logo 404s, fall back to the letter badge.
     img.addEventListener('error', () => {
       el.classList.add('tk-avatar-fallback');
       el.textContent = ref.symbol.slice(0, 1).toUpperCase();
@@ -75,6 +73,13 @@ export function renderTokenButton(
   btn.appendChild(caret);
 }
 
+/** Map a chain `kind` to a colour class for the network tag. */
+function netClass(kind: string | undefined): string {
+  if (kind === 'sol') return 'tk-net-solana';
+  if (kind === 'evm') return 'tk-net-evm';
+  return 'tk-net-other';
+}
+
 /** Open the modal picker. Returns a close function. */
 export function openTokenPicker(opts: PickerOptions): () => void {
   const overlay = document.createElement('div');
@@ -87,7 +92,7 @@ export function openTokenPicker(opts: PickerOptions): () => void {
       </div>
       <input class="tk-search input" type="text" placeholder="Search name, symbol or chain…" autocomplete="off" spellcheck="false" />
       <div class="tk-list" role="listbox"></div>
-      <p class="tk-empty hint" hidden>No tokens match.</p>
+      <p class="tk-empty hint" hidden></p>
     </div>`;
 
   const search = overlay.querySelector<HTMLInputElement>('.tk-search')!;
@@ -102,35 +107,54 @@ export function openTokenPicker(opts: PickerOptions): () => void {
     if (e.key === 'Escape') close();
   };
 
-  const renderList = (): void => {
+  const setStatus = (msg: string): void => {
     list.innerHTML = '';
-    if (!isLoaded()) {
-      empty.hidden = false;
-      empty.textContent = 'Loading tokens…';
-      return;
+    empty.hidden = false;
+    empty.textContent = msg;
+  };
+
+  let seq = 0;
+  const run = async (): Promise<void> => {
+    const mine = ++seq;
+    setStatus('Searching…');
+    try {
+      const results = await searchTokens(search.value);
+      if (mine !== seq) return; // a newer query superseded this one
+      list.innerHTML = '';
+      if (results.length === 0) {
+        setStatus('No tokens match.');
+        return;
+      }
+      empty.hidden = true;
+      const frag = document.createDocumentFragment();
+      for (const t of results) frag.appendChild(tokenRow(t, opts, close));
+      list.appendChild(frag);
+    } catch (err) {
+      if (mine !== seq) return;
+      setStatus(err instanceof Error ? err.message : 'Search failed.');
     }
-    const results = getTokens().length === 0 ? [] : searchTokens(search.value);
-    empty.hidden = results.length > 0;
-    if (results.length === 0) empty.textContent = 'No tokens match.';
-    const frag = document.createDocumentFragment();
-    for (const t of results) frag.appendChild(tokenRow(t, opts, close));
-    list.appendChild(frag);
+  };
+
+  let debounce: ReturnType<typeof setTimeout> | undefined;
+  const schedule = (): void => {
+    if (debounce) clearTimeout(debounce);
+    debounce = setTimeout(() => void run(), 250);
   };
 
   overlay.querySelector<HTMLButtonElement>('.tk-close')!.addEventListener('click', close);
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
   });
-  search.addEventListener('input', renderList);
+  search.addEventListener('input', schedule);
   document.addEventListener('keydown', onKey);
 
   document.body.appendChild(overlay);
-  renderList();
   search.focus();
+  void run(); // initial (empty term) → top tokens
   return close;
 }
 
-function tokenRow(t: HoudiniToken, opts: PickerOptions, close: () => void): HTMLElement {
+function tokenRow(t: V2Token, opts: PickerOptions, close: () => void): HTMLElement {
   const row = document.createElement('button');
   row.type = 'button';
   row.className = 'tk-row';
@@ -147,7 +171,7 @@ function tokenRow(t: HoudiniToken, opts: PickerOptions, close: () => void): HTML
   row.appendChild(meta);
 
   const net = document.createElement('span');
-  net.className = `tk-net-tag tk-net-${classifyNetwork(t.network)}`;
+  net.className = `tk-net-tag ${netClass(t.kind)}`;
   net.textContent = t.network;
   row.appendChild(net);
 

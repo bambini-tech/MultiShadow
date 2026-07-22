@@ -197,8 +197,7 @@ body {
   text-transform: capitalize; background: var(--panel-2); border: 1px solid var(--border);
 }
 .pill.pending { color: var(--muted); }
-.pill.order_created { color: #8ab4ff; border-color: rgba(138, 180, 255, 0.4); }
-.pill.funded { color: var(--warn); border-color: rgba(255, 176, 32, 0.4); }
+.pill.active { color: var(--warn); border-color: rgba(255, 176, 32, 0.4); }
 .pill.completed { color: var(--accent-2); border-color: rgba(56, 211, 159, 0.5); }
 .pill.failed { color: var(--danger); border-color: rgba(255, 92, 114, 0.5); }
 
