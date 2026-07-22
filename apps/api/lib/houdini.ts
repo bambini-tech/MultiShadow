@@ -17,9 +17,24 @@ export function getHoudiniClient(): HoudiniClient {
     throw new Error('HOUDINI_API_KEY is not set. The proxy cannot call Houdini without it.');
   }
 
+  // Auth scheme is configurable so it can be matched to the official docs
+  // WITHOUT a code change. Defaults to `Authorization: Bearer <key>`.
+  //   HOUDINI_API_KEY_HEADER — header name (e.g. "Authorization" or "x-api-key")
+  //   HOUDINI_BEARER         — "false" to send the raw key (no "Bearer " prefix)
+  const apiKeyHeader = process.env.HOUDINI_API_KEY_HEADER?.trim() || 'Authorization';
+  const bearerEnv = process.env.HOUDINI_BEARER?.trim().toLowerCase();
+  const bearer =
+    bearerEnv === 'true'
+      ? true
+      : bearerEnv === 'false'
+        ? false
+        : apiKeyHeader.toLowerCase() === 'authorization';
+
   cached = new HoudiniClient({
     baseUrl,
     apiKey,
+    apiKeyHeader,
+    bearer,
     // Route DEX variants when explicitly enabled server-side.
     dex: process.env.HOUDINI_DEX === 'true',
   });
