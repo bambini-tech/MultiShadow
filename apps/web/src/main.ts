@@ -3,7 +3,7 @@ import { Store, initialState, toTokenRef, type Settings } from './state.js';
 import { mountApp, type Actions } from './ui.js';
 import { createWallet } from './appkit.js';
 import { computePreview, runDistribution, loadBatch } from './engine.js';
-import { loadCatalog, findDefaultSource } from './catalog.js';
+import { fetchDefaultSource } from './catalog.js';
 import { config } from './config.js';
 import type { Wallet } from './wallet.js';
 
@@ -58,32 +58,31 @@ mountApp(root, store, actions);
 // 2) Initialise the wallet in a guard so failures degrade gracefully.
 initWallet();
 
-// 3) Load the full token catalog (all chains/tokens) for the pickers.
+// 3) Resolve the default source token (pickers search the catalog on demand).
 initCatalog();
 
 // 4) Recover any interrupted run for this batch id.
 void loadBatch(store, batchId);
 
 function initCatalog(): void {
-  loadCatalog()
-    .then(() => {
-      const def = findDefaultSource();
+  // Resolve the default source (native SOL) so the app is usable out of the box.
+  // Individual pickers search the catalog on demand, so there's nothing else to
+  // preload here.
+  fetchDefaultSource()
+    .then((def) => {
+      const ref = def ? toTokenRef(def) : undefined;
       store.set((s) => ({
         tokensLoaded: true,
-        // Default the source and any unset recipient token to SOL, matching the
-        // previous out-of-the-box behaviour while keeping full choice.
-        settings: {
-          ...s.settings,
-          source: s.settings.source ?? (def ? toTokenRef(def) : undefined),
-        },
+        settings: { ...s.settings, source: s.settings.source ?? ref },
         recipients: s.recipients.map((r) =>
-          r.token ? r : { ...r, ...(def ? { token: toTokenRef(def) } : {}) },
+          r.token ? r : { ...r, ...(ref ? { token: ref } : {}) },
         ),
       }));
     })
     .catch((e) => {
-      store.set({ tokensError: e instanceof Error ? e.message : String(e) });
-      store.log(`Could not load token list: ${e instanceof Error ? e.message : String(e)}`);
+      // Non-fatal: pickers still work; the user just picks a source manually.
+      store.set({ tokensLoaded: true, tokensError: e instanceof Error ? e.message : String(e) });
+      store.log(`Could not resolve default token: ${e instanceof Error ? e.message : String(e)}`);
     });
 }
 

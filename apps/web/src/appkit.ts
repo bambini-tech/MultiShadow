@@ -24,19 +24,20 @@ import type { AppKitNetwork } from '@reown/appkit/networks';
 import { SolanaAdapter } from '@reown/appkit-adapter-solana';
 import { EthersAdapter } from '@reown/appkit-adapter-ethers';
 import { BrowserProvider, type Eip1193Provider } from 'ethers';
-import type { Transaction } from '@solana/web3.js';
+import type { Transaction, VersionedTransaction } from '@solana/web3.js';
 import { config, metadata } from './config.js';
-import type { EvmSendRequest, Wallet, WalletKind } from './wallet.js';
+import type { Wallet, WalletKind } from './wallet.js';
+
+type AnySolTx = Transaction | VersionedTransaction;
 
 /** Minimal shape we rely on from the Reown Solana wallet provider. */
 interface SolanaProvider {
-  signAndSendTransaction?: (tx: Transaction) => Promise<{ signature: string } | string>;
-  sendTransaction?: (tx: Transaction) => Promise<string>;
+  signAndSendTransaction?: (tx: AnySolTx) => Promise<{ signature: string } | string>;
+  sendTransaction?: (tx: AnySolTx) => Promise<string>;
 }
 
-/** EVM networks we let the source wallet switch to, keyed by numeric chain id. */
+/** EVM networks the source wallet may connect on. */
 const EVM_NETWORKS: AppKitNetwork[] = [mainnet, bsc, polygon, arbitrum, base, optimism, avalanche];
-const EVM_BY_ID = new Map<number, AppKitNetwork>(EVM_NETWORKS.map((n) => [Number(n.id), n]));
 
 export function createWallet(): Wallet {
   const solanaAdapter = new SolanaAdapter();
@@ -63,7 +64,6 @@ export function createWallet(): Wallet {
       cb: (acc: { address?: string; isConnected?: boolean }) => void,
       namespace?: string,
     ) => void;
-    switchNetwork?: (network: AppKitNetwork) => Promise<void>;
     open: () => void;
     disconnect: () => Promise<void>;
   };
@@ -111,7 +111,7 @@ export function createWallet(): Wallet {
       return () => listeners.delete(cb);
     },
 
-    async signAndSendSolana(tx: Transaction): Promise<string> {
+    async signAndSendSolana(tx: AnySolTx): Promise<string> {
       const provider =
         kit.getProvider?.<SolanaProvider>('solana') ??
         (kit.getWalletProvider?.() as SolanaProvider | undefined);
@@ -124,23 +124,10 @@ export function createWallet(): Wallet {
       throw new Error('Connected wallet does not support signing Solana transactions.');
     },
 
-    async switchEvmChain(chainId: number): Promise<void> {
-      const network = EVM_BY_ID.get(chainId);
-      if (!network) {
-        throw new Error(`Source chain ${chainId} is not enabled in the wallet configuration.`);
-      }
-      await kit.switchNetwork?.(network);
-    },
-
-    async sendEvm(req: EvmSendRequest): Promise<string> {
+    async signEvmMessage(message: string | Uint8Array): Promise<string> {
       const browser = new BrowserProvider(getEvmProvider());
       const signer = await browser.getSigner();
-      const tx = await signer.sendTransaction({
-        to: req.to,
-        ...(req.valueWei !== undefined ? { value: req.valueWei } : {}),
-        ...(req.data ? { data: req.data } : {}),
-      });
-      return tx.hash;
+      return signer.signMessage(message);
     },
   };
 }

@@ -6,7 +6,6 @@
 import { isValidAddressForChain } from '@multishadow/core';
 import type { AppState, Recipient, Settings, Store, Strategy } from './state.js';
 import { newRecipient, toTokenRef } from './state.js';
-import { findDefaultSource, isLoaded as catalogLoaded } from './catalog.js';
 import { openTokenPicker, renderTokenButton, tokenButton } from './tokenPicker.js';
 
 export interface Actions {
@@ -100,9 +99,11 @@ export function mountApp(root: HTMLElement, store: Store, actions: Actions): voi
   `;
 
   root.querySelector<HTMLButtonElement>('#addRecipient')!.addEventListener('click', () => {
-    const def = catalogLoaded() ? findDefaultSource() : undefined;
     const r = newRecipient();
-    if (def) r.token = toTokenRef(def);
+    // Default a new recipient to receive the current source token (a sensible
+    // starting point the user can change per row).
+    const src = store.get().settings.source;
+    if (src) r.token = src;
     store.set((s) => ({ recipients: [...s.recipients, r] }));
   });
   root.querySelector<HTMLButtonElement>('#previewBtn')!.addEventListener('click', actions.preview);
@@ -390,27 +391,36 @@ function renderPreview(el: HTMLElement, s: AppState): void {
 }
 
 function renderStatus(el: HTMLElement, s: AppState): void {
-  const records = Object.values(s.wallets);
-  if (records.length === 0) {
+  const orders = s.orders;
+  if (orders.length === 0) {
     el.innerHTML = `<p class="hint">No active distribution.</p>`;
     return;
   }
-  const rows = records
+  const rows = orders
     .map(
-      (r) => `<tr>
-        <td class="mono">${short(r.receiver)}</td>
-        <td><span class="pill ${r.phase}">${r.phase.replace('_', ' ')}</span></td>
-        <td class="num">${r.depositAmount ? r.depositAmount.toFixed(6) : r.amount.toFixed(6)}</td>
-        <td class="mono">${r.fundingTxSignature ? short(r.fundingTxSignature) : '—'}</td>
-        <td class="err">${r.error ? escapeHtml(r.error) : ''}</td>
+      (o) => `<tr>
+        <td class="mono">${short(o.receiver)}</td>
+        <td>${o.token ? `${escapeHtml(o.token.symbol)} · ${escapeHtml(o.token.network)}` : '—'}</td>
+        <td><span class="pill ${phaseClass(o.phase)}">${escapeHtml(o.phase)}</span></td>
+        <td class="num">${o.depositAmount != null ? o.depositAmount.toFixed(6) : '—'}</td>
+        <td class="mono">${o.fundingTx ? short(o.fundingTx) : '—'}</td>
+        <td class="err">${o.error ? escapeHtml(o.error) : ''}</td>
       </tr>`,
     )
     .join('');
   el.innerHTML = `
     <table class="tbl">
-      <thead><tr><th>Recipient</th><th>State</th><th class="num">Amount</th><th>Funding tx</th><th>Error</th></tr></thead>
+      <thead><tr><th>Recipient</th><th>Receives</th><th>State</th><th class="num">Deposit</th><th>Funding tx</th><th>Error</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+/** Group a Houdini order phase into a colour class for the status pill. */
+function phaseClass(phase: string): string {
+  if (phase === 'completed') return 'completed';
+  if (['failed', 'expired', 'refunded', 'deleted'].includes(phase)) return 'failed';
+  if (['initializing', 'new', 'waiting', 'pending'].includes(phase)) return 'pending';
+  return 'active';
 }
 
 function renderLog(el: HTMLElement, s: AppState): void {

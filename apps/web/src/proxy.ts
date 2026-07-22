@@ -1,21 +1,26 @@
 /**
- * Typed client for the MultiShadow proxy.
+ * Typed client for the MultiShadow proxy → Houdini v2.
  *
- * The proxy returns already-normalized Houdini objects (the serverless functions
- * run the same core `map*` functions), so we consume the core types directly.
- * The Houdini API key lives ONLY behind this proxy — never here.
+ * The proxy forwards allowlisted Houdini v2 paths under `/api/hd/*` with the API
+ * key injected server-side. Responses are raw Houdini JSON; we normalize them
+ * here via the core `map*` helpers. The Houdini key never reaches the browser.
  */
-import type {
-  HoudiniQuote,
-  HoudiniOrder,
-  HoudiniOrderStatus,
-  HoudiniMinMax,
-  HoudiniToken,
+import {
+  mapV2TokenSearch,
+  mapMultiCreate,
+  mapMultiStatus,
+  mapMultiTx,
+  mapSubmitTx,
+  type V2TokenSearchResult,
+  type V2MultiCreateResult,
+  type V2MultiStatusResult,
+  type V2MultiTxResult,
+  type V2SubmitTxResult,
 } from '@multishadow/core';
 import { config } from './config.js';
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(config.apiBaseUrl + path, {
+async function request(path: string, init?: RequestInit): Promise<unknown> {
+  const res = await fetch(`${config.apiBaseUrl}/hd${path}`, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     ...init,
   });
@@ -28,44 +33,75 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         : `Request to ${path} failed (${res.status})`;
     throw new Error(message);
   }
-  return json as T;
+  return json;
+}
+
+/** One order in a multi-exchange create request. */
+export interface MultiOrderInput {
+  from: string;
+  to: string;
+  amount: number;
+  addressTo: string;
+  anonymous?: boolean;
+  destinationTag?: string;
+}
+
+export interface TokenSearchParams {
+  term?: string;
+  chain?: string;
+  symbol?: string;
+  hasCex?: boolean;
+  page?: number;
+  pageSize?: number;
 }
 
 export const proxy = {
-  quote(params: { amount: number; from: string; to: string; anonymous?: boolean }) {
-    const q = new URLSearchParams({
-      amount: String(params.amount),
-      from: params.from,
-      to: params.to,
-      anonymous: String(params.anonymous ?? true),
-    });
-    return request<HoudiniQuote>(`/quote?${q.toString()}`);
+  searchTokens(params: TokenSearchParams = {}): Promise<V2TokenSearchResult> {
+    const q = new URLSearchParams();
+    if (params.term) q.set('term', params.term);
+    if (params.chain) q.set('chain', params.chain);
+    if (params.symbol) q.set('symbol', params.symbol);
+    if (params.hasCex !== undefined) q.set('hasCex', String(params.hasCex));
+    q.set('page', String(params.page ?? 1));
+    q.set('pageSize', String(params.pageSize ?? 50));
+    return request(`/tokens?${q.toString()}`).then(mapV2TokenSearch);
   },
 
-  exchange(params: {
-    amount: number;
-    from: string;
-    to: string;
-    addressTo: string;
-    addressToTag?: string;
-    anonymous?: boolean;
-  }) {
-    return request<HoudiniOrder>('/exchange', {
+  createMultiExchange(
+    orders: MultiOrderInput[],
+    filters?: Record<string, unknown>,
+  ): Promise<V2MultiCreateResult> {
+    return request('/exchanges/multi', {
       method: 'POST',
-      body: JSON.stringify(params),
-    });
+      body: JSON.stringify({ orders, ...(filters ? { filters } : {}) }),
+    }).then(mapMultiCreate);
   },
 
-  status(orderId: string) {
-    return request<HoudiniOrderStatus>(`/status?id=${encodeURIComponent(orderId)}`);
+  multiStatus(multiId: string): Promise<V2MultiStatusResult> {
+    return request(`/exchanges/multi/${encodeURIComponent(multiId)}`).then(mapMultiStatus);
   },
 
-  minMax(params: { from: string; to: string }) {
-    const q = new URLSearchParams(params);
-    return request<HoudiniMinMax>(`/min-max?${q.toString()}`);
+  /** Solana: batched deposit transactions (base64) ready to sign. */
+  multiTxSolana(multiId: string, sender: string): Promise<V2MultiTxResult> {
+    const q = new URLSearchParams({ sender });
+    return request(`/exchanges/multi/${encodeURIComponent(multiId)}/tx?${q.toString()}`).then(
+      mapMultiTx,
+    );
   },
 
-  tokens() {
-    return request<HoudiniToken[]>('/tokens');
+  /** EVM: build ERC-4337 user-operation batches to sign. */
+  multiTxBuildEvm(multiId: string, sender: string): Promise<V2MultiTxResult> {
+    return request(`/exchanges/multi/${encodeURIComponent(multiId)}/tx/build`, {
+      method: 'POST',
+      body: JSON.stringify({ sender }),
+    }).then(mapMultiTx);
+  },
+
+  /** EVM: submit signed user-operations. */
+  multiTxSubmitEvm(multiId: string, signatures: string[]): Promise<V2SubmitTxResult> {
+    return request(`/exchanges/multi/${encodeURIComponent(multiId)}/tx`, {
+      method: 'POST',
+      body: JSON.stringify({ signatures }),
+    }).then(mapSubmitTx);
   },
 };

@@ -36,3 +36,31 @@ export function getHoudiniClient(): HoudiniClient {
   });
   return cached;
 }
+
+export interface HoudiniRequestConfig {
+  baseUrl: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * The base URL + auth headers for talking to Houdini v2 directly (used by the
+ * generic proxy passthrough). Reads the same env as {@link getHoudiniClient}.
+ */
+export function getHoudiniRequestConfig(): HoudiniRequestConfig {
+  const apiKey = process.env.HOUDINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('HOUDINI_API_KEY is not set. The proxy cannot call Houdini without it.');
+  }
+  const baseUrl = (
+    process.env.HOUDINI_BASE_URL ?? 'https://api-partner.houdiniswap.com/v2'
+  ).replace(/\/+$/, '');
+  const apiKeyHeader = process.env.HOUDINI_API_KEY_HEADER?.trim() || 'Authorization';
+  const bearer = process.env.HOUDINI_BEARER?.trim().toLowerCase() === 'true';
+  return {
+    baseUrl,
+    headers: {
+      Accept: 'application/json',
+      [apiKeyHeader]: bearer ? `Bearer ${apiKey}` : apiKey,
+    },
+  };
+}

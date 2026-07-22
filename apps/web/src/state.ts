@@ -1,29 +1,36 @@
 /** App state types + a tiny observable store (no framework). */
-import type { HoudiniToken, WalletRecord } from '@multishadow/core';
+import type { V2Token } from '@multishadow/core';
 
 export type Strategy = 'equal' | 'random-in-range' | 'weighted';
 
 /**
- * A lightweight reference to a Houdini token, cached on recipients/settings so
- * the UI can render a selection without holding the whole catalog. The `id` is
- * the Houdini token id used as `from`/`to` in quote/exchange.
+ * A lightweight reference to a Houdini v2 token, cached on recipients/settings
+ * so the UI can render a selection without re-querying. The `id` is the Houdini
+ * token ObjectId used as `from`/`to` in the exchange endpoints.
  */
 export interface TokenRef {
   id: string;
   symbol: string;
   name: string;
+  /** Chain short name, e.g. "ethereum", "solana". */
   network: string;
+  /** Chain kind, e.g. "sol", "evm", "bitcoin". Drives the funding path. */
+  kind?: string;
+  /** Numeric EVM chain id when the chain is EVM. */
+  evmChainId?: number;
   logo?: string;
   decimals?: number;
   contractAddress?: string;
 }
 
-export function toTokenRef(t: HoudiniToken): TokenRef {
+export function toTokenRef(t: V2Token): TokenRef {
   return {
     id: t.id,
     symbol: t.symbol,
     name: t.name,
     network: t.network,
+    ...(t.kind ? { kind: t.kind } : {}),
+    ...(t.evmChainId !== undefined ? { evmChainId: t.evmChainId } : {}),
     ...(t.logo ? { logo: t.logo } : {}),
     ...(t.decimals !== undefined ? { decimals: t.decimals } : {}),
     ...(t.contractAddress ? { contractAddress: t.contractAddress } : {}),
@@ -63,6 +70,20 @@ export interface PreviewRow {
   amount: number;
 }
 
+/** Live view of one Houdini order in a multi-swap group. */
+export interface OrderView {
+  houdiniId: string;
+  /** Destination (recipient) address. */
+  receiver: string;
+  token?: TokenRef;
+  depositAddress?: string;
+  depositAmount?: number;
+  /** OrderPhase from Houdini, plus local pre-create states. */
+  phase: string;
+  fundingTx?: string;
+  error?: string;
+}
+
 export interface AppState {
   connected: boolean;
   address?: string;
@@ -76,8 +97,10 @@ export interface AppState {
   /** Token catalog load state (drives the token pickers). */
   tokensLoaded: boolean;
   tokensError?: string;
-  /** Live per-wallet records keyed by wallet key. */
-  wallets: Record<string, WalletRecord>;
+  /** The active multi-exchange group id, when a run is in progress. */
+  multiId?: string;
+  /** Live per-order views for the current/last run. */
+  orders: OrderView[];
   log: string[];
 }
 
@@ -97,7 +120,7 @@ export function initialState(): AppState {
     settings: { ...defaultSettings },
     running: false,
     tokensLoaded: false,
-    wallets: {},
+    orders: [],
     log: [],
   };
 }

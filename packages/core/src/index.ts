@@ -63,6 +63,32 @@ export {
 export { classifyNetwork, evmChainId, isSupportedSourceNetwork } from './chains/networks.js';
 export type { NetworkKind } from './chains/networks.js';
 
+// Houdini v2 (native multi-swap) normalizers
+export {
+  mapV2Token,
+  mapV2TokenSearch,
+  mapV2Order,
+  mapOrderStatus,
+  isTerminalOrderPhase,
+  mapMultiCreate,
+  mapMultiStatus,
+  mapMultiTx,
+  mapSubmitTx,
+} from './houdini/v2.js';
+export type {
+  V2Token,
+  V2TokenSearchResult,
+  V2Order,
+  OrderPhase,
+  V2MultiCreateItem,
+  V2MultiCreateResult,
+  V2MultiStatusResult,
+  V2TxBatch,
+  V2EvmBatchTx,
+  V2MultiTxResult,
+  V2SubmitTxResult,
+} from './houdini/v2.js';
+
 // State
 export {
   canTransition,
