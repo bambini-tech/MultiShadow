@@ -56,7 +56,7 @@ body {
 .hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
 
 .recipient {
-  display: grid; grid-template-columns: 1fr 92px 70px 70px 70px 34px; gap: 8px;
+  display: grid; grid-template-columns: 136px 1fr 66px 66px 66px 34px; gap: 8px;
   margin-bottom: 8px; align-items: center;
 }
 .input, .select {
@@ -98,13 +98,80 @@ body {
 .info.info-left::after { left: 0; right: auto; transform: none; }
 .info:hover::after, .info:focus-visible::after { opacity: 1; visibility: visible; }
 
-/* Column header above the recipient rows */
-.recipient.rowhead { margin-bottom: 6px; }
-.headcell {
-  display: inline-flex; align-items: center; gap: 2px;
-  font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
-  color: var(--muted); white-space: nowrap;
+/* Card header row: title + the field-guide menu toggle */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card-head h2 { margin: 0; }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.btn.small.active { border-color: var(--accent); color: var(--text); }
+
+/* Field guide — the collapsible info menu that replaced the column header */
+.legend {
+  margin: 4px 0 14px; padding: 12px 14px; display: grid; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
 }
+.legend-item { display: grid; grid-template-columns: 72px 1fr; gap: 10px; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.legend-label { color: var(--text); font-weight: 600; }
+
+/* Token picker trigger button */
+.tk-button {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 6px 9px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 13px;
+  text-align: left; transition: border-color 0.15s;
+}
+.tk-button:hover { border-color: var(--accent); }
+.tk-button-label { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; flex: 1; }
+.tk-button-label.tk-placeholder { color: var(--muted); font-size: 12.5px; }
+.tk-sym { font-weight: 600; font-size: 13px; }
+.tk-net { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-caret { color: var(--muted); font-size: 10px; margin-left: auto; }
+
+/* Token avatar (logo or lettered fallback) */
+.tk-avatar {
+  width: 24px; height: 24px; flex: none; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center; background: var(--panel);
+  border: 1px solid var(--border);
+}
+.tk-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.tk-avatar-fallback {
+  font-size: 11px; font-weight: 700; color: var(--muted);
+  background: linear-gradient(135deg, var(--panel-2), var(--panel));
+}
+
+/* Token picker modal */
+.tk-overlay {
+  position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start;
+  justify-content: center; padding: 8vh 16px 16px;
+  background: rgba(4, 6, 10, 0.66); backdrop-filter: blur(2px);
+}
+.tk-modal {
+  width: 100%; max-width: 420px; max-height: 80vh; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55); overflow: hidden;
+}
+.tk-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
+.tk-modal-head h3 { margin: 0; font-size: 15px; }
+.tk-close { background: none; border: none; color: var(--muted); font-size: 15px; cursor: pointer; padding: 4px; }
+.tk-close:hover { color: var(--text); }
+.tk-search { margin: 0 16px 10px; width: calc(100% - 32px); }
+.tk-list { overflow-y: auto; padding: 4px 8px 8px; }
+.tk-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px;
+  background: none; border: none; border-radius: 9px; cursor: pointer; text-align: left; color: var(--text);
+}
+.tk-row:hover { background: var(--panel-2); }
+.tk-row-active { background: rgba(124, 92, 255, 0.14); }
+.tk-row-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+.tk-row-sym { font-weight: 600; font-size: 13.5px; }
+.tk-row-name { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-net-tag {
+  flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+}
+.tk-net-solana { color: var(--accent-2); border-color: rgba(56, 211, 159, 0.4); }
+.tk-net-evm { color: #8ab4ff; border-color: rgba(138, 180, 255, 0.4); }
+.tk-empty { padding: 18px; text-align: center; }
 
 .btn {
   padding: 9px 14px; border-radius: 9px; border: 1px solid var(--border);
@@ -145,8 +212,9 @@ body {
 
 @media (max-width: 760px) {
   .grid { grid-template-columns: 1fr; }
-  .recipient { grid-template-columns: 1fr 1fr; }
-  /* The column header only aligns with the desktop grid; hide it on mobile
-     where inputs reflow and rely on their placeholders instead. */
-  .recipient.rowhead { display: none; }
+  /* Reflow the recipient row: token + address span full width, the numeric
+     inputs share a row, and the remove button tucks alongside. */
+  .recipient { grid-template-columns: 1fr 1fr 1fr 34px; }
+  .recipient > .tk-button { grid-column: 1 / -1; }
+  .recipient > .input.grow { grid-column: 1 / 4; }
 }

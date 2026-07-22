@@ -25,6 +25,14 @@ export interface HoudiniToken {
   /** Network / chain name, e.g. "SOL", "ETH". */
   network: string;
   decimals?: number;
+  /** Icon/logo URL, when the API provides one (used by the token picker). */
+  logo?: string;
+  /**
+   * On-chain contract/mint address for non-native tokens (ERC-20 contract, SPL
+   * mint). Absent for a chain's native coin. Needed to build token transfers
+   * when this token is the funding SOURCE.
+   */
+  contractAddress?: string;
   /** Original object, in case the caller needs a field we did not normalize. */
   raw: RawJson;
 }
@@ -125,12 +133,23 @@ function pick(obj: RawJson, keys: string[]): unknown {
 
 export function mapToken(raw: RawJson): HoudiniToken {
   const decimals = pick(raw, ['decimals', 'decimal']);
+  const logo = pick(raw, ['logo', 'logoUrl', 'icon', 'iconUrl', 'image', 'imageUrl']);
+  const contract = pick(raw, [
+    'contractAddress',
+    'contract',
+    'address',
+    'mint',
+    'mintAddress',
+    'tokenAddress',
+  ]);
   return {
     id: str(pick(raw, ['id', '_id', 'token', 'tokenId'])),
     symbol: str(pick(raw, ['symbol', 'ticker'])),
     name: str(pick(raw, ['name', 'title'])),
     network: str(pick(raw, ['network', 'chain', 'blockchain'])),
     ...(decimals !== undefined ? { decimals: num(decimals) } : {}),
+    ...(logo !== undefined && str(logo) !== '' ? { logo: str(logo) } : {}),
+    ...(contract !== undefined && str(contract) !== '' ? { contractAddress: str(contract) } : {}),
     raw,
   };
 }

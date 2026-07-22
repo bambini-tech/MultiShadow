@@ -1,14 +1,41 @@
 /** App state types + a tiny observable store (no framework). */
-import type { WalletRecord } from '@multishadow/core';
+import type { HoudiniToken, WalletRecord } from '@multishadow/core';
 
 export type Strategy = 'equal' | 'random-in-range' | 'weighted';
+
+/**
+ * A lightweight reference to a Houdini token, cached on recipients/settings so
+ * the UI can render a selection without holding the whole catalog. The `id` is
+ * the Houdini token id used as `from`/`to` in quote/exchange.
+ */
+export interface TokenRef {
+  id: string;
+  symbol: string;
+  name: string;
+  network: string;
+  logo?: string;
+  decimals?: number;
+  contractAddress?: string;
+}
+
+export function toTokenRef(t: HoudiniToken): TokenRef {
+  return {
+    id: t.id,
+    symbol: t.symbol,
+    name: t.name,
+    network: t.network,
+    ...(t.logo ? { logo: t.logo } : {}),
+    ...(t.decimals !== undefined ? { decimals: t.decimals } : {}),
+    ...(t.contractAddress ? { contractAddress: t.contractAddress } : {}),
+  };
+}
 
 export interface Recipient {
   id: string;
   address: string;
-  /** Destination chain family, e.g. "SOL", "ETH". */
-  chain: string;
-  /** Optional per-recipient min/max (decimal SOL of source). */
+  /** Destination token (any chain). Undefined until the user picks one. */
+  token?: TokenRef;
+  /** Optional per-recipient min/max (decimal amount of the SOURCE token). */
   min?: number;
   max?: number;
   /** Relative weight for the "weighted" strategy. */
@@ -16,6 +43,8 @@ export interface Recipient {
 }
 
 export interface Settings {
+  /** The funding token every recipient is paid FROM (any chain). */
+  source?: TokenRef;
   total: number;
   strategy: Strategy;
   /** 0..1 randomness for random/weighted strategies. */
@@ -30,18 +59,23 @@ export interface Settings {
 export interface PreviewRow {
   recipientId: string;
   address: string;
-  chain: string;
+  token?: TokenRef;
   amount: number;
 }
 
 export interface AppState {
   connected: boolean;
   address?: string;
+  /** Active wallet ecosystem of the connected account, when known. */
+  walletKind?: 'solana' | 'evm';
   recipients: Recipient[];
   settings: Settings;
   preview?: PreviewRow[];
   previewError?: string;
   running: boolean;
+  /** Token catalog load state (drives the token pickers). */
+  tokensLoaded: boolean;
+  tokensError?: string;
   /** Live per-wallet records keyed by wallet key. */
   wallets: Record<string, WalletRecord>;
   log: string[];
@@ -62,6 +96,7 @@ export function initialState(): AppState {
     recipients: [newRecipient(), newRecipient()],
     settings: { ...defaultSettings },
     running: false,
+    tokensLoaded: false,
     wallets: {},
     log: [],
   };
@@ -70,7 +105,7 @@ export function initialState(): AppState {
 let seq = 0;
 export function newRecipient(): Recipient {
   seq += 1;
-  return { id: `r${Date.now()}_${seq}`, address: '', chain: 'SOL' };
+  return { id: `r${Date.now()}_${seq}`, address: '' };
 }
 
 /** Minimal observable store. */
